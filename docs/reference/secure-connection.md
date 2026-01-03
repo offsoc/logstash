@@ -22,7 +22,7 @@ Security is enabled by default on the {{es}} cluster (starting in 8.0). You must
 
 {{ls}} must establish a Secure Sockets Layer (SSL) connection before it can transfer data to a secured {{es}} cluster. {{ls}} must have a copy of the certificate authority (CA) that signed the {{es}} cluster’s certificates. When a new {{es}} cluster is started up *without* dedicated certificates, it generates its own default self-signed Certificate Authority at startup. See [Starting the Elastic Stack with security enabled](docs-content://deploy-manage/deploy/self-managed/installing-elasticsearch.md) for more info.
 
-{{ess}} uses certificates signed by standard publicly trusted certificate authorities, and therefore setting a cacert is not necessary.
+{{ess}} uses certificates signed by standard publicly trusted certificate authorities, and therefore setting a `ssl_certificate_authorities` value is not necessary.
 
 $$$serverless$$$
 
@@ -53,10 +53,9 @@ Configuration example:
 * `output {elasticsearch { cloud_id => "<cloud id>" cloud_auth => "<cloud auth>" } }`
 * `output {elasticsearch { cloud_id => "<cloud id>" api_key => "<api key>" } }`
 
-For more details, check out [Grant access using API keys](#ls-api-keys) or [Sending data to Elastic Cloud (hosted Elasticsearch Service)](/reference/connecting-to-cloud.md).
+For more details, check out [Grant access using API keys](#ls-api-keys) or [Sending data to {{ech}}](/reference/connecting-to-cloud.md).
 
 ::::
-
 
 
 ### Secure communication with an on-premise {{es}} cluster [es-security-onprem]
@@ -204,7 +203,7 @@ To access the indices Logstash creates, users need the `read` and `view_index_me
 
 ### Configuring Logstash to use TLS/SSL encryption [ls-http-ssl]
 
-If TLS encryption is enabled on an on premise {{es}} cluster, you need to configure the `ssl` and `cacert` options in your Logstash `.conf` file:
+If TLS encryption is enabled on an on premise {{es}} cluster, you need to configure the `ssl_enabled` and `ssl_certificate_authorities` options in your Logstash `.conf` file:
 
 ```js
 output {
@@ -290,13 +289,22 @@ Tips for creating API keys:
 
 * API keys are tied to the cluster they are created in. If you are sending output to different clusters, be sure to create the correct kind of API key.
 * {{ls}} can send both collected data and monitoring information to {{es}}. If you are sending both to the same cluster, you can use the same API key. For different clusters, you need an API key per cluster.
-* A single cluster can share a key for ingestion and monitoring purposes.
+* A single cluster can share a key for ingestion and monitoring.
 * A production cluster and a monitoring cluster require separate keys.
+* When you create an API key for {{ls}}, select **Logstash** from the **API key format** dropdown.
+  This option formats the API key in the correct `id:api_key` format required by {{ls}}.
+
+  :::{image} images/logstash_api_key_format.png
+  :alt: API key format dropdown set to {{ls}}:
+  :screenshot:
+  :width: 400px
+  :::
+
+  The UI for API keys may look different depending on the deployment type.
 
 ::::{note}
 For security reasons, we recommend using a unique API key per {{ls}} instance. You can create as many API keys per user as necessary.
 ::::
-
 
 
 #### Create an API key [ls-create-api-key]
@@ -356,7 +364,7 @@ output {
 }
 ```
 
-1. Format is `id:api_key` (as returned by [Create API key](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-security-create-api-key))
+1. The format of the value is `id:api_key`, where `id` and `api_key` are the values returned by the [Create API key API](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-security-create-api-key)
 
 
 
@@ -374,7 +382,7 @@ input {
 }
 ```
 
-1. Format is `id:api_key` (as returned by [Create API key](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-security-create-api-key))s
+1. The format of the value is `id:api_key`, where `id` and `api_key` are the values returned by the [Create API key API](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-security-create-api-key)
 
 
 
@@ -392,7 +400,7 @@ filter {
 }
 ```
 
-1. Format is `id:api_key` (as returned by [Create API key](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-security-create-api-key))
+1. The format of the value is `id:api_key`, where `id` and `api_key` are the values returned by the [Create API key API](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-security-create-api-key)
 
 
 
@@ -442,7 +450,7 @@ Now you can use this API key in your logstash.yml configuration file:
 xpack.monitoring.elasticsearch.api_key: TiNAGG4BaaMdaH1tRfuU:KnR6yE41RrSowb0kQ0HWoA <1>
 ```
 
-1. Format is `id:api_key` (as returned by [Create API key](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-security-create-api-key))
+1. The format of the value is `id:api_key`, where `id` and `api_key` are the values returned by the [Create API key API](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-security-create-api-key)
 
 
 
@@ -486,7 +494,7 @@ Now you can use this API key in your logstash.yml configuration file:
 xpack.management.elasticsearch.api_key: TiNAGG4BaaMdaH1tRfuU:KnR6yE41RrSowb0kQ0HWoA <1>
 ```
 
-1. Format is `id:api_key` (as returned by [Create API key](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-security-create-api-key))
+1. The format of the value is `id:api_key`, where `id` and `api_key` are the values returned by the [Create API key API](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-security-create-api-key)
 
 
 

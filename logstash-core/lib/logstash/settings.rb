@@ -44,8 +44,6 @@ module LogStash
     PIPELINE_SETTINGS_WHITE_LIST = [
       "config.debug",
       "config.support_escapes",
-      "config.reload.automatic",
-      "config.reload.interval",
       "config.string",
       "dead_letter_queue.enable",
       "dead_letter_queue.flush_interval",
@@ -58,6 +56,7 @@ module LogStash
       "path.dead_letter_queue",
       "path.queue",
       "pipeline.batch.delay",
+      "pipeline.batch.metrics.sampling_mode",
       "pipeline.batch.size",
       "pipeline.id",
       "pipeline.reloadable",
@@ -66,14 +65,21 @@ module LogStash
       "pipeline.ordered",
       "pipeline.ecs_compatibility",
       "queue.checkpoint.acks",
-      "queue.checkpoint.interval",
+      "queue.checkpoint.interval", # remove it for #17155
       "queue.checkpoint.writes",
       "queue.checkpoint.retry",
+      "queue.compression",
       "queue.drain",
       "queue.max_bytes",
       "queue.max_events",
       "queue.page_capacity",
       "queue.type",
+    ]
+
+    # These are deprecated as pipeline override settings, they still exist as process-level settings
+    DEPRECATED_PIPELINE_OVERRIDE_SETTINGS = [
+      "config.reload.automatic",
+      "config.reload.interval",
     ]
 
     def initialize
@@ -152,12 +158,10 @@ module LogStash
     alias_method :set, :set_value
 
     def to_hash
-      hash = {}
-      @settings.each do |name, setting|
+      @settings.each_with_object({}) do |(name, setting), hash|
         next if (setting.kind_of? Setting::DeprecatedAlias) || (setting.kind_of? Java::org.logstash.settings.DeprecatedAlias)
         hash[name] = setting.value
       end
-      hash
     end
 
     def merge(hash, graceful = false)
@@ -167,7 +171,12 @@ module LogStash
 
     def merge_pipeline_settings(hash, graceful = false)
       hash.each do |key, _|
-        unless PIPELINE_SETTINGS_WHITE_LIST.include?(key)
+        if DEPRECATED_PIPELINE_OVERRIDE_SETTINGS.include?(key)
+          deprecation_logger.deprecated("Config option \"#{key}\", set for pipeline \"#{hash['pipeline.id']}\", is " +
+                                          "deprecated as a pipeline override setting. Please only set it at " +
+                                          "the process level.")
+          hash.delete(key)
+        elsif !PIPELINE_SETTINGS_WHITE_LIST.include?(key)
           raise ArgumentError.new("Only pipeline related settings are expected. Received \"#{key}\". Allowed settings: #{PIPELINE_SETTINGS_WHITE_LIST}")
         end
       end
@@ -412,87 +421,15 @@ module LogStash
     end
     ### Specific settings #####
 
-    java_import org.logstash.settings.Boolean
-    java_import org.logstash.settings.SettingNumeric
+    java_import org.logstash.settings.BooleanSetting
+    java_import org.logstash.settings.NumericSetting
 
-    class Integer < Coercible
-      def initialize(name, default = nil, strict = true)
-        super(name, ::Integer, default, strict)
-      end
+    java_import org.logstash.settings.IntegerSetting
+    java_import org.logstash.settings.PositiveIntegerSetting
 
-      def coerce(value)
-        return value unless value.is_a?(::String)
+    java_import org.logstash.settings.PortSetting # seems unused
 
-        coerced_value = Integer(value) rescue nil
-
-        if coerced_value.nil?
-          raise ArgumentError.new("Failed to coerce value to Integer. Received #{value} (#{value.class})")
-        else
-          coerced_value
-        end
-      end
-    end
-
-    class PositiveInteger < Integer
-      def initialize(name, default = nil, strict = true)
-        super(name, default, strict) do |v|
-          if v > 0
-            true
-          else
-            raise ArgumentError.new("Number must be bigger than 0. Received: #{v}")
-          end
-        end
-      end
-    end
-
-    class Port < Integer
-      VALID_PORT_RANGE = 1..65535
-
-      def initialize(name, default = nil, strict = true)
-        super(name, default, strict) { |value| valid?(value) }
-      end
-
-      def valid?(port)
-        VALID_PORT_RANGE.cover?(port)
-      end
-    end
-
-    class PortRange < Coercible
-      PORT_SEPARATOR = "-"
-
-      def initialize(name, default = nil, strict = true)
-        super(name, ::Range, default, strict = true) { |value| valid?(value) }
-      end
-
-      def valid?(range)
-        Port::VALID_PORT_RANGE.first <= range.first && Port::VALID_PORT_RANGE.last >= range.last
-      end
-
-      def coerce(value)
-        case value
-        when ::Range
-          value
-        when ::Integer
-          value..value
-        when ::String
-          first, last = value.split(PORT_SEPARATOR)
-          last = first if last.nil?
-          begin
-            (Integer(first))..(Integer(last))
-          rescue ArgumentError # Trap and reraise a more human error
-            raise ArgumentError.new("Could not coerce #{value} into a port range")
-          end
-        else
-          raise ArgumentError.new("Could not coerce #{value} into a port range")
-        end
-      end
-
-      def validate(value)
-        unless valid?(value)
-          raise ArgumentError.new("Invalid value \"#{name}: #{value}\", valid options are within the range of #{Port::VALID_PORT_RANGE.first}-#{Port::VALID_PORT_RANGE.last}")
-        end
-      end
-    end
+    java_import org.logstash.settings.PortRangeSetting
 
     class Validator < Setting
       def initialize(name, default = nil, strict = true, validator_class = nil)
@@ -505,72 +442,11 @@ module LogStash
       end
     end
     
-    java_import org.logstash.settings.SettingString
+    java_import org.logstash.settings.StringSetting
 
-    java_import org.logstash.settings.SettingNullableString
-
-    class Password < Coercible
-      def initialize(name, default = nil, strict = true)
-        super(name, LogStash::Util::Password, default, strict)
-      end
-
-      def coerce(value)
-        return value if value.kind_of?(LogStash::Util::Password)
-
-        if value && !value.kind_of?(::String)
-          raise(ArgumentError, "Setting `#{name}` could not coerce non-string value to password")
-        end
-
-        LogStash::Util::Password.new(value)
-      end
-
-      def validate(value)
-        super(value)
-      end
-    end
-
-    class ValidatedPassword < Setting::Password
-      def initialize(name, value, password_policies)
-        @password_policies = password_policies
-        super(name, value, true)
-      end
-
-      def coerce(password)
-        if password && !password.kind_of?(::LogStash::Util::Password)
-          raise(ArgumentError, "Setting `#{name}` could not coerce LogStash::Util::Password value to password")
-        end
-
-        policies = build_password_policies
-        validatedResult = LogStash::Util::PasswordValidator.new(policies).validate(password.value)
-        if validatedResult.length() > 0
-          if @password_policies.fetch(:mode).eql?("WARN")
-            logger.warn("Password #{validatedResult}.")
-          else
-            raise(ArgumentError, "Password #{validatedResult}.")
-          end
-        end
-        password
-      end
-
-      def build_password_policies
-        policies = {}
-        policies[Util::PasswordPolicyType::EMPTY_STRING] = Util::PasswordPolicyParam.new
-        policies[Util::PasswordPolicyType::LENGTH] = Util::PasswordPolicyParam.new("MINIMUM_LENGTH", @password_policies.dig(:length, :minimum).to_s)
-        if @password_policies.dig(:include, :upper).eql?("REQUIRED")
-          policies[Util::PasswordPolicyType::UPPER_CASE] = Util::PasswordPolicyParam.new
-        end
-        if @password_policies.dig(:include, :lower).eql?("REQUIRED")
-          policies[Util::PasswordPolicyType::LOWER_CASE] = Util::PasswordPolicyParam.new
-        end
-        if @password_policies.dig(:include, :digit).eql?("REQUIRED")
-          policies[Util::PasswordPolicyType::DIGIT] = Util::PasswordPolicyParam.new
-        end
-        if @password_policies.dig(:include, :symbol).eql?("REQUIRED")
-          policies[Util::PasswordPolicyType::SYMBOL] = Util::PasswordPolicyParam.new
-        end
-        policies
-      end
-    end
+    java_import org.logstash.settings.NullableStringSetting
+    java_import org.logstash.settings.PasswordSetting
+    java_import org.logstash.settings.ValidatedPasswordSetting
 
     # The CoercibleString allows user to enter any value which coerces to a String.
     # For example for true/false booleans; if the possible_strings are ["foo", "true", "false"]

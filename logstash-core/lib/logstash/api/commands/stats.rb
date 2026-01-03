@@ -32,7 +32,7 @@ module LogStash
           total_queued_events = 0
           pipeline_ids.each do |pipeline_id|
             p_stats = service.get_shallow(:stats, :pipelines, pipeline_id.to_sym)
-            type = p_stats[:queue] && p_stats[:queue][:type].value
+            type = p_stats.dig(:queue, :type)&.value
             pipeline = service.agent.get_pipeline(pipeline_id)
             next if pipeline.nil? || pipeline.system? || type != 'persisted'
             total_queued_events += p_stats.dig(:queue, :events)&.value || 0
@@ -172,6 +172,41 @@ module LogStash
             end
           end
 
+          def refine_batch_metrics(stats)
+            # current is a tuple of [event_count, byte_size] store the reference locally to avoid repeatedly
+            # reading and retrieve unrelated values
+            current_data_point = stats[:batch][:current]
+# FlowMetric (from stats[:batch][:event_count][:average]) returns a composite object containing lifetime/last_1_minute/etc values. In order to get the map of sub-metrics we must use `.value`.
+# See: https://github.com/elastic/logstash/blob/279171b79c1f3be5fc85e6e2e4092281e504a6f9/logstash-core/src/main/java/org/logstash/instrument/metrics/ExtendedFlowMetric.java#L89
+            event_count_average_flow_metric = stats[:batch][:event_count][:average].value
+            event_count_average_lifetime = event_count_average_flow_metric["lifetime"] ? event_count_average_flow_metric["lifetime"].round : 0
+            byte_size_average_flow_metric = stats[:batch][:byte_size][:average].value
+            byte_size_average_lifetime = byte_size_average_flow_metric["lifetime"] ? byte_size_average_flow_metric["lifetime"].round : 0
+            result = {
+              :event_count => {
+                # current_data_point is an instance of org.logstash.instrument.metrics.gauge.LazyDelegatingGauge so need to invoke getValue() to obtain the actual value
+                :current => current_data_point.value[0],
+                :average => {
+                  :lifetime => event_count_average_lifetime
+                }
+              },
+              :byte_size => {
+                :current => current_data_point.value[1],
+                :average => {
+                  :lifetime => byte_size_average_lifetime
+                }
+              }
+            }
+            # Enrich byte_size and event_count averages with the last 1, 5, 15 minutes averages if available
+            [:last_1_minute, :last_5_minutes, :last_15_minutes].each do |window|
+              key = window.to_s
+              result[:event_count][:average][window] = event_count_average_flow_metric[key]&.round if event_count_average_flow_metric[key]
+              result[:byte_size][:average][window] = byte_size_average_flow_metric[key]&.round if byte_size_average_flow_metric[key]
+            end
+            result
+          end
+          private :refine_batch_metrics
+
           def report(stats, extended_stats = nil, opts = {})
             ret = {
               :events => stats[:events],
@@ -190,6 +225,7 @@ module LogStash
                 :batch_delay => stats.dig(:config, :batch_delay),
               }
             }
+            ret[:batch] = refine_batch_metrics(stats) if stats.include?(:batch)
             ret[:dead_letter_queue] = stats[:dlq] if stats.include?(:dlq)
 
             # if extended_stats were provided, enrich the return value
